@@ -2,6 +2,7 @@ package commands
 
 import (
 	"errors"
+	"github.com/TRON-US/go-btfs/core/commands/storage/renter"
 
 	"github.com/TRON-US/go-btfs/core/commands/cmdenv"
 	dag "github.com/TRON-US/go-btfs/core/commands/dag"
@@ -152,7 +153,7 @@ var rootSubcommands = map[string]*cmds.Command{
 	"shutdown":  daemonShutdownCmd,
 	"cid":       CidCmd,
 	"rm":        RmCmd,
-	"storage":   StorageCmd,
+	"storage":   renter.StorageCmd,
 	"metadata":  MetadataCmd,
 	"guard":     GuardCmd,
 	//"update":    ExternalBinary(),
