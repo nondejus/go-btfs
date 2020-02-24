@@ -3,7 +3,6 @@ package renter
 import (
 	"context"
 	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/looplab/fsm"
 	"time"
 )
@@ -18,17 +17,19 @@ var (
 )
 
 type FileSession struct {
-	Id        string
-	Filehash  string
-	RenterPid peer.ID
-	ctx       context.Context
-	step      chan interface{}
-	fsm       *fsm.FSM
+	Id       string
+	Time     time.Time
+	FileHash string
+	Status   string
+	ctx      context.Context
+	step     chan interface{}
+	fsm      *fsm.FSM
 }
 
 func NewFileSession(ctx context.Context) *FileSession {
 	f := &FileSession{
 		Id:   uuid.New().String(),
+		Time: time.Now().UTC(),
 		ctx:  ctx,
 		step: make(chan interface{}),
 	}
@@ -48,7 +49,12 @@ func NewFileSession(ctx context.Context) *FileSession {
 	return f
 }
 
+func (f *FileSession) serialize() []byte {
+	return []byte{0, 1}
+}
+
 func (f *FileSession) enterState(e *fsm.Event) {
+	f.Status = e.Dst
 	t, ok := timeouts[e.Dst]
 	if ok {
 		go func() {

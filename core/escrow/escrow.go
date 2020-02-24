@@ -25,6 +25,9 @@ func NewContract(configuration *config.Config, id string, n *core.IpfsNode, pid 
 	price int64, customizedSchedule bool, period int) (*escrowpb.EscrowContract, error) {
 	payerPubKey := n.PrivateKey.GetPublic()
 	hostPubKey, err := pid.ExtractPublicKey()
+	if err != nil {
+		return nil, err
+	}
 	if len(configuration.Services.GuardPubKeys) == 0 {
 		return nil, fmt.Errorf("No Services.GuardPubKeys are set in config")
 	}

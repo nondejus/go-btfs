@@ -2,34 +2,33 @@ package renter
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	cmds "github.com/TRON-US/go-btfs-cmds"
 	"github.com/TRON-US/go-btfs/core/commands/cmdenv"
 	"github.com/TRON-US/go-btfs/core/commands/storage"
+	"github.com/TRON-US/go-btfs/core/corehttp/remote"
 	"github.com/TRON-US/go-btfs/core/escrow"
+	"github.com/TRON-US/go-btfs/core/hub"
 	coreiface "github.com/TRON-US/interface-go-btfs-core"
 	"github.com/TRON-US/interface-go-btfs-core/path"
 	"github.com/google/uuid"
 	cidlib "github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p-core/peer"
+	"math"
+	"strconv"
 	"time"
 )
 
 const (
-	leafHashOptionName               = "leaf-hash"
-	uploadPriceOptionName            = "price"
-	replicationFactorOptionName      = "replication-factor"
-	hostSelectModeOptionName         = "host-select-mode"
-	hostSelectionOptionName          = "host-selection"
-	testOnlyOptionName               = "host-search-local"
-	storageLengthOptionName          = "storage-length"
-	repairModeOptionName             = "repair-mode"
-	customizedPayoutOptionName       = "customize-payout"
-	customizedPayoutPeriodOptionName = "customize-payout-period"
-
-	defaultRepFactor     = 3
-	defaultStorageLength = 30
+	uploadPriceOptionName   = "price"
+	storageLengthOptionName = "storage-length"
+	defaultStorageLength    = 30
 )
+
+// TODO: get/set the value from/in go-btfs-common
+var HostPriceLowBoundary = int64(10)
 
 var StorageCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
@@ -80,21 +79,10 @@ Use status command to check for completion:
 	Subcommands: map[string]*cmds.Command{},
 	Arguments: []cmds.Argument{
 		cmds.StringArg("file-hash", true, false, "Hash of file to upload."),
-		cmds.StringArg("repair-shards", false, false, "Shard hashes to repair."),
-		cmds.StringArg("renter-pid", false, false, "Original renter peer ID."),
-		cmds.StringArg("blacklist", false, false, "Blacklist of hosts during upload."),
 	},
 	Options: []cmds.Option{
-		cmds.BoolOption(leafHashOptionName, "l", "Flag to specify given hash(es) is leaf hash(es).").WithDefault(false),
 		cmds.Int64Option(uploadPriceOptionName, "p", "Max price per GiB per day of storage in BTT."),
-		cmds.IntOption(replicationFactorOptionName, "r", "Replication factor for the file with erasure coding built-in.").WithDefault(defaultRepFactor),
-		cmds.StringOption(hostSelectModeOptionName, "m", "Based on this mode to select hosts and upload automatically. Default: mode set in config option Experimental.HostsSyncMode."),
-		cmds.StringOption(hostSelectionOptionName, "s", "Use only these selected hosts in order on 'custom' mode. Use ',' as delimiter."),
-		cmds.BoolOption(testOnlyOptionName, "t", "Enable host search under all domains 0.0.0.0 (useful for local test)."),
 		cmds.IntOption(storageLengthOptionName, "len", "File storage period on hosts in days.").WithDefault(defaultStorageLength),
-		cmds.BoolOption(repairModeOptionName, "rm", "Enable repair mode.").WithDefault(false),
-		cmds.BoolOption(customizedPayoutOptionName, "Enable file storage customized payout schedule.").WithDefault(false),
-		cmds.IntOption(customizedPayoutPeriodOptionName, "Period of customized payout schedule.").WithDefault(1),
 	},
 	RunTimeout: 15 * time.Minute,
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
@@ -109,13 +97,6 @@ Use status command to check for completion:
 		if err != nil {
 			return err
 		}
-		mode := cfg.Experimental.HostsSyncMode
-
-		// init
-		session := NewFileSession(req.Context)
-		session.Filehash = req.Arguments[0]
-		session.RenterPid = n.Identity
-		session.ToInit()
 
 		// get core api
 		api, err := cmdenv.GetApi(env, req)
@@ -137,22 +118,49 @@ Use status command to check for completion:
 			return fmt.Errorf("invalid hash: %s", err)
 		}
 
-		hosts, err := storage.GetHostsFromDatastore(req.Context, n, mode, len(hashes))
-		for _, h := range hosts {
-			fmt.Println("host", h.NodeId, h.StoragePriceAsk)
+		hp := GetHostProvider(req.Context, n, cfg.Experimental.HostsSyncMode, api)
+
+		price, found := req.Options[uploadPriceOptionName].(int64)
+		if found && price < HostPriceLowBoundary {
+			return fmt.Errorf("price is smaller than minimum setting price")
 		}
+		if found && price >= math.MaxInt64 {
+			return fmt.Errorf("price should be smaller than max int64")
+		}
+		ns, err := hub.GetSettings(req.Context, cfg.Services.HubDomain,
+			n.Identity.String(), n.Repo.Datastore())
 		if err != nil {
 			return err
 		}
+		if !found {
+			price = int64(ns.StoragePriceAsk)
+		}
+
+		// init
+		session := NewSession(req.Context, n.Repo.Datastore(), n.Identity.String())
+		session.ToInit(n.Identity.String(), hashStr)
 
 		shardHashes := make([]string, 0)
-		idx := 0
+		shardSize, err := getContractSizeFromCid(req.Context, hashes[0], api)
+		if err != nil {
+			return err
+		}
+		storageLength := req.Options[storageLengthOptionName].(int)
+		if uint64(storageLength) < ns.StorageTimeMin {
+			return fmt.Errorf("invalid storage len. want: >= %d, got: %d",
+				ns.StorageTimeMin, storageLength)
+		}
 		for i, h := range hashes {
 			shardHashes = append(shardHashes, h.String())
-			fmt.Println("hash i", i, h.String())
-
-			peerId, _ := peer.IDB58Decode(hosts[idx].String())
-			contract, _ := escrow.NewContract(cfg, uuid.New().String(), n, peerId, 0, false, 0)
+			host, err := hp.NextValidHost()
+			if err != nil {
+				return err
+			}
+			peerId, err := peer.IDB58Decode(host)
+			if err != nil {
+				return err
+			}
+			contract, err := escrow.NewContract(cfg, uuid.New().String(), n, peerId, price, false, 0)
 			if err != nil {
 				return fmt.Errorf("create escrow contract failed: [%v] ", err)
 			}
@@ -160,8 +168,41 @@ Use status command to check for completion:
 			if err != nil {
 				return fmt.Errorf("sign escrow contract and maorshal failed: [%v] ", err)
 			}
-			fmt.Println(halfSignedEscrowContract)
-			idx++
+			fmt.Println("halfSignedEscrowContract", hex.EncodeToString(sha1.New().Sum(halfSignedEscrowContract)))
+
+			metadata, err := session.GetMetadata()
+			if err != nil {
+				return err
+			}
+			s := NewShard(req.Context, i, session.Id, metadata.FileHash, h.String(), int64(shardSize),
+				int64(storageLength),
+				host)
+			guardContractMeta, err := NewContract2(s, cfg, int32(i), peerId.String())
+			if err != nil {
+				return fmt.Errorf("fail to new contract meta: [%v] ", err)
+			}
+			halfSignGuardContract, err := SignedContractAndMarshal(guardContractMeta, nil, n.PrivateKey, true,
+				false, n.Identity.Pretty(), n.Identity.Pretty())
+			if err != nil {
+				return fmt.Errorf("fail to sign guard contract and marshal: [%v] ", err)
+			}
+			fmt.Println("halfSignGuardContract", hex.EncodeToString(sha1.New().Sum(halfSignGuardContract)))
+
+			//TODO: atomic update and save to leveldb
+			s.HalfSignedEscrowContract = halfSignedEscrowContract
+			s.HalfSignedGuardContract = halfSignGuardContract
+
+			_, err = remote.P2PCall(req.Context, n, peerId, "/storage/upload/init",
+				session.Id,
+				metadata.FileHash,
+				s.ShardHash,
+				strconv.FormatInt(s.Price, 10),
+				s.HalfSignedEscrowContract,
+				s.HalfSignedGuardContract,
+				strconv.FormatInt(s.StorageLength, 10),
+				strconv.FormatInt(s.ShardFileSize, 10),
+				strconv.Itoa(s.Index),
+			)
 		}
 
 		seRes := &UploadRes{

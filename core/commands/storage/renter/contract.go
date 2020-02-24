@@ -1,9 +1,8 @@
-package guard
+package renter
 
 import (
 	"context"
 	"fmt"
-	"github.com/TRON-US/go-btfs/core/commands/storage/renter"
 	"github.com/TRON-US/go-btfs/core/escrow"
 	"time"
 
@@ -98,7 +97,7 @@ func NewContract(session *storage.FileContracts, configuration *config.Config, s
 	}, nil
 }
 
-func NewContract2(s *renter.Shard, configuration *config.Config, shardIndex int32,
+func NewContract2(s *Shard, configuration *config.Config, shardIndex int32,
 	renterPid string) (*guardPb.ContractMeta, error) {
 	guardPid, escrowPid, err := getGuardAndEscrowPid(configuration)
 	if err != nil {

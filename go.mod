@@ -118,7 +118,6 @@ require (
 	github.com/pierrec/lz4 v2.2.6+incompatible // indirect
 	github.com/pkg/errors v0.8.1
 	github.com/prometheus/client_golang v0.9.3
-	github.com/prometheus/common v0.4.0
 	github.com/prometheus/procfs v0.0.0-20190519111021-9935e8e0588d // indirect
 	github.com/shirou/gopsutil v2.19.11+incompatible
 	github.com/stretchr/testify v1.4.0
@@ -152,3 +151,5 @@ replace github.com/ipfs/go-ipld-format => github.com/TRON-US/go-ipld-format v0.1
 replace github.com/ipfs/go-cid => github.com/TRON-US/go-cid v0.1.0
 
 replace github.com/libp2p/go-libp2p-core => github.com/TRON-US/go-libp2p-core v0.4.1
+
+replace github.com/tron-us/go-btfs-common => ../go-btfs-common
