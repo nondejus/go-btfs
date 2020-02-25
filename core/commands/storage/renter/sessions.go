@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+var (
+	timeouts = map[string]time.Duration{
+		"init":   10 * time.Minute,
+		"submit": 10  * time.Minute,
+		"pay":    10 * time.Minute,
+		"guard":  10 * time.Minute,
+	}
+)
+
 const (
 	session_metadata_key  = "/peers/%s/v0.0.1/renter/sessions/%s/metadata"
 	session_status_key    = "/peers/%s/v0.0.1/renter/sessions/%s/status"
@@ -67,7 +76,10 @@ func (f *Session) enterState(e *fsm.Event) {
 	}
 	switch e.Dst {
 	case "init":
-		f.init(e.Args[0].(string), e.Args[1].(string))
+		err := f.init(e.Args[0].(string), e.Args[1].(string))
+		if err != nil {
+			log.Error("err", err)
+		}
 	}
 }
 
@@ -100,6 +112,7 @@ func (f *Session) Timeout() error {
 }
 
 func (f *Session) init(renterId string, fileHash string) error {
+	fmt.Println("fileHash@", fileHash)
 	status := &renterpb.Status{
 		Status:  "init",
 		Message: "",
@@ -119,8 +132,8 @@ func (f *Session) init(renterId string, fileHash string) error {
 }
 
 func (f *Session) GetMetadata() (*renterpb.Metadata, error) {
-	sk := fmt.Sprintf(session_status_key, f.peerId, f.Id)
+	sk := fmt.Sprintf(session_metadata_key, f.peerId, f.Id)
 	md := &renterpb.Metadata{}
-	err := ds.Get(f.ds, sk, &renterpb.Metadata{})
+	err := ds.Get(f.ds, sk, md)
 	return md, err
 }

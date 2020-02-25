@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/TRON-US/go-btfs/core/escrow"
+	"github.com/tron-us/go-btfs-common/protos/btfs/shard"
 	"time"
 
 	"github.com/TRON-US/go-btfs/core/commands/storage"
@@ -97,26 +98,27 @@ func NewContract(session *storage.FileContracts, configuration *config.Config, s
 	}, nil
 }
 
-func NewContract2(s *Shard, configuration *config.Config, shardIndex int32,
+func NewContract2(md *shard.Metadata, shardHash string, configuration *config.Config,
 	renterPid string) (*guardPb.ContractMeta, error) {
+	fmt.Println("guard contract", md)
 	guardPid, escrowPid, err := getGuardAndEscrowPid(configuration)
 	if err != nil {
 		return nil, err
 	}
 	return &guardPb.ContractMeta{
-		ContractId:    s.ContractId,
+		ContractId:    md.ContractId,
 		RenterPid:     renterPid,
-		HostPid:       s.Receiver,
-		ShardHash:     s.ShardHash,
-		ShardIndex:    shardIndex,
-		ShardFileSize: int64(s.ShardFileSize),
-		FileHash:      s.FileHash,
-		RentStart:     s.StartTime,
-		RentEnd:       s.StartTime.Add(s.ContractLength),
+		HostPid:       md.Receiver,
+		ShardHash:     shardHash,
+		ShardIndex:    md.Index,
+		ShardFileSize: md.ShardFileSize,
+		FileHash:      md.FileHash,
+		RentStart:     md.StartTime,
+		RentEnd:       md.StartTime.Add(md.ContractLength),
 		GuardPid:      guardPid.Pretty(),
 		EscrowPid:     escrowPid.Pretty(),
-		Price:         s.Price,
-		Amount:        s.TotalPay, // TODO: CHANGE and aLL other optional fields
+		Price:         md.Price,
+		Amount:        md.TotalPay, // TODO: CHANGE and aLL other optional fields
 	}, nil
 }
 

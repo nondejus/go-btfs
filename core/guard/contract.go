@@ -3,7 +3,6 @@ package guard
 import (
 	"context"
 	"fmt"
-	"github.com/TRON-US/go-btfs/core/commands/storage/renter"
 	"github.com/TRON-US/go-btfs/core/escrow"
 	"time"
 
@@ -95,29 +94,6 @@ func NewContract(session *storage.FileContracts, configuration *config.Config, s
 		EscrowPid:     escrowPid.Pretty(),
 		Price:         shard.Price,
 		Amount:        shard.TotalPay, // TODO: CHANGE and aLL other optional fields
-	}, nil
-}
-
-func NewContract2(s *renter.Shard, configuration *config.Config, shardIndex int32,
-	renterPid string) (*guardPb.ContractMeta, error) {
-	guardPid, escrowPid, err := getGuardAndEscrowPid(configuration)
-	if err != nil {
-		return nil, err
-	}
-	return &guardPb.ContractMeta{
-		ContractId:    s.ContractId,
-		RenterPid:     renterPid,
-		HostPid:       s.Receiver,
-		ShardHash:     s.ShardHash,
-		ShardIndex:    shardIndex,
-		ShardFileSize: int64(s.ShardFileSize),
-		FileHash:      s.FileHash,
-		RentStart:     s.StartTime,
-		RentEnd:       s.StartTime.Add(s.ContractLength),
-		GuardPid:      guardPid.Pretty(),
-		EscrowPid:     escrowPid.Pretty(),
-		Price:         s.Price,
-		Amount:        s.TotalPay, // TODO: CHANGE and aLL other optional fields
 	}, nil
 }
 

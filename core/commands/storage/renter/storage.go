@@ -2,8 +2,6 @@ package renter
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	cmds "github.com/TRON-US/go-btfs-cmds"
 	"github.com/TRON-US/go-btfs/core/commands/cmdenv"
@@ -16,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	cidlib "github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p-core/peer"
+	shardpb "github.com/tron-us/go-btfs-common/protos/btfs/shard"
 	"math"
 	"strconv"
 	"time"
@@ -139,7 +138,6 @@ Use status command to check for completion:
 		// init
 		session := NewSession(req.Context, n.Repo.Datastore(), n.Identity.String())
 		session.ToInit(n.Identity.String(), hashStr)
-
 		shardHashes := make([]string, 0)
 		shardSize, err := getContractSizeFromCid(req.Context, hashes[0], api)
 		if err != nil {
@@ -168,16 +166,30 @@ Use status command to check for completion:
 			if err != nil {
 				return fmt.Errorf("sign escrow contract and maorshal failed: [%v] ", err)
 			}
-			fmt.Println("halfSignedEscrowContract", hex.EncodeToString(sha1.New().Sum(halfSignedEscrowContract)))
 
+			fmt.Println(1)
 			metadata, err := session.GetMetadata()
 			if err != nil {
 				return err
 			}
-			s := NewShard(req.Context, i, session.Id, metadata.FileHash, h.String(), int64(shardSize),
-				int64(storageLength),
-				host)
-			guardContractMeta, err := NewContract2(s, cfg, int32(i), peerId.String())
+			fmt.Println(2)
+			s := NewShard(req.Context, n.Repo.Datastore(), n.Identity.String(), session.Id, h.String())
+
+			fmt.Println(3)
+			md := &shardpb.Metadata{
+				Index:          int32(i),
+				SessionId:      session.Id,
+				FileHash:       metadata.FileHash,
+				ShardFileSize:  int64(shardSize),
+				StorageLength:  int64(storageLength),
+				ContractId:     session.Id,
+				Receiver:       host,
+				Price:          price,
+				TotalPay:       0,
+				StartTime:      time.Now().UTC(),
+				ContractLength: time.Duration(storageLength*24) * time.Hour,
+			}
+			guardContractMeta, err := NewContract2(md, h.String(), cfg, peerId.String())
 			if err != nil {
 				return fmt.Errorf("fail to new contract meta: [%v] ", err)
 			}
@@ -186,23 +198,44 @@ Use status command to check for completion:
 			if err != nil {
 				return fmt.Errorf("fail to sign guard contract and marshal: [%v] ", err)
 			}
-			fmt.Println("halfSignGuardContract", hex.EncodeToString(sha1.New().Sum(halfSignGuardContract)))
 
-			//TODO: atomic update and save to leveldb
-			s.HalfSignedEscrowContract = halfSignedEscrowContract
-			s.HalfSignedGuardContract = halfSignGuardContract
+			fmt.Println(4)
+			md.HalfSignedEscrowContract = halfSignedEscrowContract
+			md.HalfSignedGuardContract = halfSignGuardContract
+			s.ToInit(md)
 
+			fmt.Println(5)
+			fmt.Println("session.Id", session.Id)
+			fmt.Println("metadata.FileHash", metadata.FileHash)
+			fmt.Println("h.String()", h.String())
+			fmt.Println("md.Price", strconv.FormatInt(md.Price, 10))
+			fmt.Println("halfSignedEscrowContract", len(halfSignedEscrowContract))
+			fmt.Println("halfSignGuardContract", len(halfSignGuardContract))
+			fmt.Println("md.StorageLength", md.StorageLength)
+			fmt.Println("md.ShardFileSize", md.ShardFileSize)
+			fmt.Println("i", i)
 			_, err = remote.P2PCall(req.Context, n, peerId, "/storage/upload/init",
 				session.Id,
 				metadata.FileHash,
-				s.ShardHash,
-				strconv.FormatInt(s.Price, 10),
-				s.HalfSignedEscrowContract,
-				s.HalfSignedGuardContract,
-				strconv.FormatInt(s.StorageLength, 10),
-				strconv.FormatInt(s.ShardFileSize, 10),
-				strconv.Itoa(s.Index),
+				h.String(),
+				strconv.FormatInt(md.Price, 10),
+				halfSignedEscrowContract,
+				halfSignGuardContract,
+				strconv.FormatInt(md.StorageLength, 10),
+				strconv.FormatInt(md.ShardFileSize, 10),
+				strconv.Itoa(i),
 			)
+			if err != nil {
+				fmt.Println("p2p call err", err)
+				s.ToError(err)
+			} else {
+				s.ToContract()
+			}
+			status, err := s.Status()
+			if err != nil {
+				fmt.Println("error when get status:", err.Error())
+			}
+			fmt.Println("hash", h.String(), "status", status.Status, "msg", status.Message)
 		}
 
 		seRes := &UploadRes{
