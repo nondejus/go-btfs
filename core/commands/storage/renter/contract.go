@@ -100,7 +100,6 @@ func NewContract(session *storage.FileContracts, configuration *config.Config, s
 
 func NewContract2(md *shard.Metadata, shardHash string, configuration *config.Config,
 	renterPid string) (*guardPb.ContractMeta, error) {
-	fmt.Println("guard contract", md)
 	guardPid, escrowPid, err := getGuardAndEscrowPid(configuration)
 	if err != nil {
 		return nil, err

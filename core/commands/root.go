@@ -2,12 +2,12 @@ package commands
 
 import (
 	"errors"
-	"github.com/TRON-US/go-btfs/core/commands/storage/renter"
-
 	"github.com/TRON-US/go-btfs/core/commands/cmdenv"
 	dag "github.com/TRON-US/go-btfs/core/commands/dag"
 	"github.com/TRON-US/go-btfs/core/commands/name"
 	ocmd "github.com/TRON-US/go-btfs/core/commands/object"
+	"github.com/TRON-US/go-btfs/core/commands/storage/host"
+	"github.com/TRON-US/go-btfs/core/commands/storage/renter"
 	"github.com/TRON-US/go-btfs/core/commands/unixfs"
 
 	cmds "github.com/TRON-US/go-btfs-cmds"
@@ -153,7 +153,7 @@ var rootSubcommands = map[string]*cmds.Command{
 	"shutdown":  daemonShutdownCmd,
 	"cid":       CidCmd,
 	"rm":        RmCmd,
-	"storage":   renter.StorageCmd,
+	"storage":   StorageCmd,
 	"metadata":  MetadataCmd,
 	"guard":     GuardCmd,
 	//"update":    ExternalBinary(),
@@ -208,17 +208,17 @@ var rootROSubcommands = map[string]*cmds.Command{
 var RootRemote = &cmds.Command{}
 
 var rootRemoteSubcommands = map[string]*cmds.Command{
-	"storage": &cmds.Command{
+	"storage": {
 		Subcommands: map[string]*cmds.Command{
-			"challenge": &cmds.Command{
+			"challenge": {
 				Subcommands: map[string]*cmds.Command{
 					"response": storageChallengeResponseCmd,
 				},
 			},
-			"upload": &cmds.Command{
+			"upload": {
 				Subcommands: map[string]*cmds.Command{
-					"init":         storageUploadInitCmd,
-					"recvcontract": storageUploadRecvContractCmd,
+					"init":         host.StorageUploadInitCmd,
+					"recvcontract": renter.StorageUploadRecvContractCmd,
 				},
 			},
 		},

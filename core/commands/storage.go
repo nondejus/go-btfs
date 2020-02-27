@@ -2,9 +2,11 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/TRON-US/go-btfs/core/commands/storage/renter"
 	"math"
 	"strconv"
 	"strings"
@@ -87,7 +89,7 @@ Storage services include client upload operations, host storage operations,
 host information sync/display operations, and BTT payment-related routines.`,
 	},
 	Subcommands: map[string]*cmds.Command{
-		"upload":    storageUploadCmd,
+		"upload":    renter.StorageUploadCmd,
 		"hosts":     storageHostsCmd,
 		"info":      storageInfoCmd,
 		"announce":  storageAnnounceCmd,
@@ -891,6 +893,7 @@ the shard and replies back to client for the next challenge step.`,
 			return fmt.Errorf("price invalid: want: >=%d, got: %d", settings.StoragePriceAsk, price)
 		}
 		pid, ok := remote.GetStreamRequestRemotePeerID(req, n)
+		fmt.Println("pid:", pid.String())
 		if !ok {
 			return fmt.Errorf("fail to get peer ID from request")
 		}
@@ -928,9 +931,6 @@ the shard and replies back to client for the next challenge step.`,
 		if err != nil {
 			return err
 		}
-		if err != nil {
-			return err
-		}
 		escrowContract := halfSignedEscrowContract.GetContract()
 		guardContractMeta := halfSignedGuardContract.ContractMeta
 		// get renter's public key
@@ -945,7 +945,16 @@ the shard and replies back to client for the next challenge step.`,
 		s := halfSignedGuardContract.GetRenterSignature()
 		if s == nil {
 			s = halfSignedGuardContract.GetPreparerSignature()
+		} else {
+			fmt.Println("renter signature", s)
 		}
+
+		fmt.Println("guardContractMeta", guardContractMeta)
+		raw, err := payerPubKey.Raw()
+		if err != nil {
+			return err
+		}
+		fmt.Println("pubkey", base64.StdEncoding.EncodeToString(raw))
 		ok, err = crypto.Verify(payerPubKey, &guardContractMeta, s)
 		if !ok || err != nil {
 			return fmt.Errorf("can't verify guard contract: %v", err)
