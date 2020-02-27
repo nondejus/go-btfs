@@ -14,11 +14,16 @@ func TestSaveGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	shardHashes := make([]string, 0)
+	shardHashes = append(shardHashes, "Qm1")
+	shardHashes = append(shardHashes, "Qm2")
+	shardHashes = append(shardHashes, "Qm3")
 	current := time.Now().UTC()
 	md := &renterpb.Metadata{
-		TimeCreate: current,
-		RenterId:   node.Identity.String(),
-		FileHash:   "Qm123",
+		TimeCreate:  current,
+		RenterId:    node.Identity.String(),
+		FileHash:    "Qm123",
+		ShardHashes: shardHashes,
 	}
 	err = Save(node.Repo.Datastore(), "ds.datastore.test", md)
 	if err != nil {

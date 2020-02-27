@@ -3,6 +3,7 @@ package ds
 import (
 	"fmt"
 	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/query"
 	"github.com/tron-us/protobuf/proto"
 )
 
@@ -36,4 +37,12 @@ func Get(d ds.Datastore, key string, m proto.Message) error {
 	}
 	err = proto.Unmarshal(bytes, m)
 	return err
+}
+
+func List(d ds.Datastore, prefix string) {
+	d.Query(query.Query{
+		Prefix: prefix,
+		Filters: []query.Filter{
+		},
+	})
 }

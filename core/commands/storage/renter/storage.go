@@ -2,12 +2,15 @@ package renter
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	cmds "github.com/TRON-US/go-btfs-cmds"
 	"github.com/TRON-US/go-btfs/core/commands/cmdenv"
 	"github.com/TRON-US/go-btfs/core/commands/storage"
+	"github.com/TRON-US/go-btfs/core/commands/storage/host"
 	"github.com/TRON-US/go-btfs/core/corehttp/remote"
 	"github.com/TRON-US/go-btfs/core/escrow"
+	"github.com/TRON-US/go-btfs/core/guard"
 	"github.com/TRON-US/go-btfs/core/hub"
 	coreiface "github.com/TRON-US/interface-go-btfs-core"
 	"github.com/TRON-US/interface-go-btfs-core/path"
@@ -28,18 +31,6 @@ const (
 
 // TODO: get/set the value from/in go-btfs-common
 var HostPriceLowBoundary = int64(10)
-
-var StorageCmd = &cmds.Command{
-	Helptext: cmds.HelpText{
-		Tagline: "Interact with storage services on BTFS.",
-		ShortDescription: `
-Storage services include client upload operations, host storage operations,
-host information sync/display operations, and BTT payment-related routines.`,
-	},
-	Subcommands: map[string]*cmds.Command{
-		"upload": StorageUploadCmd,
-	},
-}
 
 type UploadRes struct {
 	ID string
@@ -75,7 +66,11 @@ To custom upload and store a file on specific hosts:
 Use status command to check for completion:
     $ btfs storage upload status <session-id> | jq`,
 	},
-	Subcommands: map[string]*cmds.Command{},
+	Subcommands: map[string]*cmds.Command{
+		"status":       storageUploadStatusCmd,
+		"recvcontract": StorageUploadRecvContractCmd,
+		"init":         host.StorageUploadInitCmd,
+	},
 	Arguments: []cmds.Argument{
 		cmds.StringArg("file-hash", true, false, "Hash of file to upload."),
 	},
@@ -112,8 +107,8 @@ Use status command to check for completion:
 		if err != nil {
 			return err
 		}
-		hashes, err := storage.CheckAndGetReedSolomonShardHashes(req.Context, n, api, rootHash)
-		if err != nil || len(hashes) == 0 {
+		cids, err := storage.CheckAndGetReedSolomonShardHashes(req.Context, n, api, rootHash)
+		if err != nil || len(cids) == 0 {
 			return fmt.Errorf("invalid hash: %s", err)
 		}
 
@@ -135,11 +130,20 @@ Use status command to check for completion:
 			price = int64(ns.StoragePriceAsk)
 		}
 
+		hashes := make([]string, 0)
+		for _, cid := range cids {
+			hashes = append(hashes, cid.String())
+		}
 		// init
-		session := NewSession(req.Context, n.Repo.Datastore(), n.Identity.String())
-		session.ToInit(n.Identity.String(), hashStr)
+		ctx, cancel := context.WithTimeout(req.Context, req.Command.RunTimeout)
+		defer cancel()
+		session := NewSession(ctx, n.Repo.Datastore(), n.Identity.String())
+		err = session.ToInit(n.Identity.String(), hashStr, hashes)
+		if err != nil {
+			return err
+		}
 		shardHashes := make([]string, 0)
-		shardSize, err := getContractSizeFromCid(req.Context, hashes[0], api)
+		shardSize, err := getContractSizeFromCid(req.Context, cids[0], api)
 		if err != nil {
 			return err
 		}
@@ -149,7 +153,11 @@ Use status command to check for completion:
 				ns.StorageTimeMin, storageLength)
 		}
 		for i, h := range hashes {
-			shardHashes = append(shardHashes, h.String())
+			s, err := GetShard(req.Context, n.Repo.Datastore(), n.Identity.String(), session.Id, h)
+			if err != nil {
+				return err
+			}
+			shardHashes = append(shardHashes, h)
 			host, err := hp.NextValidHost()
 			if err != nil {
 				return err
@@ -167,15 +175,10 @@ Use status command to check for completion:
 				return fmt.Errorf("sign escrow contract and maorshal failed: [%v] ", err)
 			}
 
-			fmt.Println(1)
 			metadata, err := session.GetMetadata()
 			if err != nil {
 				return err
 			}
-			fmt.Println(2)
-			s := NewShard(req.Context, n.Repo.Datastore(), n.Identity.String(), session.Id, h.String())
-
-			fmt.Println(3)
 			md := &shardpb.Metadata{
 				Index:          int32(i),
 				SessionId:      session.Id,
@@ -189,35 +192,37 @@ Use status command to check for completion:
 				StartTime:      time.Now().UTC(),
 				ContractLength: time.Duration(storageLength*24) * time.Hour,
 			}
-			guardContractMeta, err := NewContract2(md, h.String(), cfg, peerId.String())
+			s.ToInit(md)
+			guardContractMeta, err := NewContract2(md, h, cfg, n.Identity.String())
 			if err != nil {
 				return fmt.Errorf("fail to new contract meta: [%v] ", err)
 			}
 			halfSignGuardContract, err := SignedContractAndMarshal(guardContractMeta, nil, n.PrivateKey, true,
 				false, n.Identity.Pretty(), n.Identity.Pretty())
+			fmt.Println("guardContractMeta", guardContractMeta)
 			if err != nil {
 				return fmt.Errorf("fail to sign guard contract and marshal: [%v] ", err)
 			}
 
-			fmt.Println(4)
-			md.HalfSignedEscrowContract = halfSignedEscrowContract
-			md.HalfSignedGuardContract = halfSignGuardContract
-			s.ToInit(md)
+			sc := &shardpb.Contracts{}
+			sc.HalfSignedEscrowContract = halfSignedEscrowContract
+			sc.HalfSignedGuardContract = halfSignGuardContract
 
 			fmt.Println(5)
 			fmt.Println("session.Id", session.Id)
 			fmt.Println("metadata.FileHash", metadata.FileHash)
-			fmt.Println("h.String()", h.String())
+			fmt.Println("h.String()", h)
 			fmt.Println("md.Price", strconv.FormatInt(md.Price, 10))
 			fmt.Println("halfSignedEscrowContract", len(halfSignedEscrowContract))
 			fmt.Println("halfSignGuardContract", len(halfSignGuardContract))
 			fmt.Println("md.StorageLength", md.StorageLength)
 			fmt.Println("md.ShardFileSize", md.ShardFileSize)
 			fmt.Println("i", i)
+			fmt.Println("peerId", peerId)
 			_, err = remote.P2PCall(req.Context, n, peerId, "/storage/upload/init",
 				session.Id,
 				metadata.FileHash,
-				h.String(),
+				h,
 				strconv.FormatInt(md.Price, 10),
 				halfSignedEscrowContract,
 				halfSignGuardContract,
@@ -226,24 +231,146 @@ Use status command to check for completion:
 				strconv.Itoa(i),
 			)
 			if err != nil {
-				fmt.Println("p2p call err", err)
+				fmt.Println("err", err)
 				s.ToError(err)
 			} else {
-				s.ToContract()
+				fmt.Println("h", h, "to contract...")
+				s.ToContract(sc)
 			}
 			status, err := s.Status()
 			if err != nil {
 				fmt.Println("error when get status:", err.Error())
 			}
-			fmt.Println("hash", h.String(), "status", status.Status, "msg", status.Message)
+			fmt.Println("hash", h, "status", status.Status, "msg", status.Message)
 		}
-
 		seRes := &UploadRes{
 			ID: session.Id,
 		}
 		return res.Emit(seRes)
 	},
 	Type: UploadRes{},
+}
+
+var StorageUploadRecvContractCmd = &cmds.Command{
+	Helptext: cmds.HelpText{
+		Tagline: "For renter client to receive half signed contracts.",
+	},
+	Arguments: []cmds.Argument{
+		cmds.StringArg("session-id", true, false, "Session ID which renter uses to store all shards information."),
+		cmds.StringArg("shard-hash", true, false, "Shard the storage node should fetch."),
+		cmds.StringArg("shard-index", true, false, "Index of shard within the encoding scheme."),
+		cmds.StringArg("escrow-contract", true, false, "Signed Escrow contract."),
+		cmds.StringArg("guard-contract", true, false, "Signed Guard contract."),
+	},
+	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		fmt.Println("recv contract:", req.Arguments[1])
+		// receive contracts
+		escrowContractBytes := []byte(req.Arguments[3])
+		guardContractBytes := []byte(req.Arguments[4])
+		ssID := req.Arguments[0]
+		n, err := cmdenv.GetNode(env)
+		if err != nil {
+			return err
+		}
+		shardHash := req.Arguments[1]
+		sidx := req.Arguments[2]
+		shardIndex, err := strconv.Atoi(sidx)
+		fmt.Println("escrowContractBytes", hex.EncodeToString(escrowContractBytes))
+		fmt.Println("guardContractBytes", hex.EncodeToString(guardContractBytes))
+		fmt.Println("ssID", ssID)
+		fmt.Println("n", n)
+		fmt.Println("shardHash", shardHash)
+		fmt.Println("shardIndex", shardIndex)
+		if err != nil {
+			return err
+		}
+		fmt.Println("get shard", shardHash)
+		s, err := GetShard(req.Context, n.Repo.Datastore(), n.Identity.String(), ssID, shardHash)
+		if err != nil {
+			return err
+		}
+		guardContract, err := guard.UnmarshalGuardContract(guardContractBytes)
+		fmt.Println("guardContract", guardContract, "err", err)
+		if err != nil {
+			s.ToError(err)
+			return err
+		}
+		fmt.Println("h", shardHash, "to complete...")
+		s.ToComplete()
+		return nil
+	},
+}
+
+var storageUploadStatusCmd = &cmds.Command{
+	Helptext: cmds.HelpText{
+		Tagline: "Check storage upload and payment status (From client's perspective).",
+		ShortDescription: `
+This command print upload and payment status by the time queried.`,
+	},
+	Arguments: []cmds.Argument{
+		cmds.StringArg("session-id", true, false, "ID for the entire storage upload session.").EnableStdin(),
+	},
+	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		status := &StatusRes{}
+		// check and get session info from sessionMap
+		ssID := req.Arguments[0]
+		n, err := cmdenv.GetNode(env)
+		if err != nil {
+			return err
+		}
+		session, err := GetSession(req.Context, n.Repo.Datastore(), n.Identity.String(), ssID)
+		if err != nil {
+			return err
+		}
+		sessionStatus, err := session.GetStatus()
+		if err != nil {
+			return err
+		}
+		status.Status = sessionStatus.Status
+		status.Message = sessionStatus.Message
+
+		// check if checking request from host or client
+		cfg, err := cmdenv.GetConfig(env)
+		if err != nil {
+			return err
+		}
+		if !cfg.Experimental.StorageClientEnabled && !cfg.Experimental.StorageHostEnabled {
+			return fmt.Errorf("storage client/host api not enabled")
+		}
+
+		// get shards info from session
+		shards := make(map[string]*ShardStatus)
+		metadata, err := session.GetMetadata()
+		if err != nil {
+			return err
+		}
+		status.FileHash = metadata.FileHash
+		for _, h := range metadata.ShardHashes {
+			shard, err := GetShard(req.Context, n.Repo.Datastore(), n.Identity.String(), session.Id, h)
+			if err != nil {
+				return err
+			}
+			st, err := shard.Status()
+			if err != nil {
+				return err
+			}
+			md, err := shard.Metadata()
+			if err != nil {
+				return err
+			}
+			c := &ShardStatus{
+				ContractID: md.ContractId,
+				Price:      md.Price,
+				Host:       md.Receiver,
+				Status:     st.Status,
+				Message:    st.Message,
+			}
+			shards[h] = c
+		}
+		status.Shards = shards
+		return res.Emit(status)
+	},
+	Type: StatusRes{},
 }
 
 func getContractSizeFromCid(ctx context.Context, hash cidlib.Cid, api coreiface.CoreAPI) (uint64, error) {
@@ -253,4 +380,19 @@ func getContractSizeFromCid(ctx context.Context, hash cidlib.Cid, api coreiface.
 		return 0, err
 	}
 	return ipldNode.Size()
+}
+
+type StatusRes struct {
+	Status   string
+	Message  string
+	FileHash string
+	Shards   map[string]*ShardStatus
+}
+
+type ShardStatus struct {
+	ContractID string
+	Price      int64
+	Host       string
+	Status     string
+	Message    string
 }
