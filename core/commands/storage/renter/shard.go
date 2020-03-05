@@ -12,13 +12,20 @@ import (
 )
 
 const (
-	shardInMemKey     = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s"
-	shardStatusKey    = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/status"
-	shardMetadataKey  = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/metadata"
-	shardContractsKey = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/contracts"
+	shardInMemKey           = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s"
+	shardStatusKey          = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/status"
+	shardMetadataKey        = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/metadata"
+	shardContractsKey       = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/contracts"
+	shardSignedContractsKey = "/btfs/%s/v0.0.1/renter/sessions/%s/shards/%s/signed-contracts"
 )
 
 var (
+	shardFsmEvents = fsm.Events{
+		{Name: "toInit", Src: []string{""}, Dst: "init"},
+		{Name: "toContract", Src: []string{"init"}, Dst: "contract"},
+		{Name: "toComplete", Src: []string{"contract"}, Dst: "complete"},
+		{Name: "toError", Src: []string{"init", "contract"}, Dst: "error"},
+	}
 	shardsInMem = cmap.New()
 )
 
@@ -49,12 +56,7 @@ func GetShard(ctx context.Context, ds datastore.Datastore, peerId string, sessio
 			shardHash: shardHash,
 		}
 		s.fsm = fsm.NewFSM("",
-			fsm.Events{
-				{Name: "toInit", Src: []string{""}, Dst: "init"},
-				{Name: "toContract", Src: []string{"init"}, Dst: "contract"},
-				{Name: "toComplete", Src: []string{"contract"}, Dst: "complete"},
-				{Name: "toError", Src: []string{"init", "contract"}, Dst: "error"},
-			},
+			shardFsmEvents,
 			fsm.Callbacks{
 				"enter_state": s.enterState,
 			})
@@ -64,9 +66,7 @@ func GetShard(ctx context.Context, ds datastore.Datastore, peerId string, sessio
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("status.Status", status.Status)
 	s.fsm.SetState(status.Status)
-	fmt.Println("s.fsm.status", s.fsm.Current())
 	return s, nil
 }
 
@@ -78,7 +78,7 @@ func (s *Shard) enterState(e *fsm.Event) {
 	case "contract":
 		s.doContract(e.Args[0].(*shardpb.Contracts))
 	case "complete":
-		s.doComplete()
+		s.doComplete(e.Args[0].([]byte))
 	case "error":
 		s.doError(e.Args[0].(error))
 	}
@@ -92,8 +92,8 @@ func (s *Shard) ToContract(sc *shardpb.Contracts) error {
 	return s.fsm.Event("toContract", sc)
 }
 
-func (s *Shard) ToComplete() error {
-	return s.fsm.Event("toComplete")
+func (s *Shard) ToComplete(escrowContractBytes []byte) error {
+	return s.fsm.Event("toComplete", escrowContractBytes)
 }
 
 func (s *Shard) ToError(err error) error {
@@ -132,12 +132,22 @@ func (s *Shard) doContract(sc *shardpb.Contracts) error {
 	return ds.Batch(s.ds, ks, vs)
 }
 
-func (s *Shard) doComplete() error {
+func (s *Shard) doComplete(signedEscrowContractBytes []byte) error {
 	status := &shardpb.Status{
 		Status:  "complete",
 		Message: "",
 	}
-	return ds.Save(s.ds, fmt.Sprintf(shardStatusKey, s.peerId, s.sessionId, s.shardHash), status)
+	ks := []string{
+		fmt.Sprintf(shardStatusKey, s.peerId, s.sessionId, s.shardHash),
+		fmt.Sprintf(shardSignedContractsKey, s.peerId, s.sessionId, s.shardHash),
+	}
+	vs := []proto.Message{
+		status,
+		&shardpb.SingedContracts{
+			SignedEscrowContract: signedEscrowContractBytes,
+		},
+	}
+	return ds.Batch(s.ds, ks, vs)
 }
 
 func (s *Shard) doError(err error) error {
@@ -169,6 +179,15 @@ func (s *Shard) Metadata() (*shardpb.Metadata, error) {
 func (s *Shard) Congtracts() (*shardpb.Contracts, error) {
 	cg := &shardpb.Contracts{}
 	err := ds.Get(s.ds, fmt.Sprintf(shardContractsKey, s.peerId, s.sessionId, s.shardHash), cg)
+	if err == datastore.ErrNotFound {
+		return cg, nil
+	}
+	return cg, err
+}
+
+func (s *Shard) SignedCongtracts() (*shardpb.SingedContracts, error) {
+	cg := &shardpb.SingedContracts{}
+	err := ds.Get(s.ds, fmt.Sprintf(shardSignedContractsKey, s.peerId, s.sessionId, s.shardHash), cg)
 	if err == datastore.ErrNotFound {
 		return cg, nil
 	}

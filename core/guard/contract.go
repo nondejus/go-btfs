@@ -20,7 +20,13 @@ import (
 
 var log = logging.Logger("core/guard")
 
-func NewFileStatus(session *storage.FileContracts, contracts []*guardPb.Contract, configuration *config.Config) (*guardPb.FileStoreStatus, error) {
+func NewFileStatus(ss *storage.FileContracts, contracts []*guardPb.Contract,
+	configuration *config.Config) (*guardPb.FileStoreStatus, error) {
+	return NewFileStatus2(contracts, configuration, ss.Renter.Pretty(), ss.ID)
+}
+
+func NewFileStatus2(contracts []*guardPb.Contract, configuration *config.Config,
+	renterId string, fileHash string) (*guardPb.FileStoreStatus, error) {
 	guardPid, escrowPid, err := getGuardAndEscrowPid(configuration)
 	if err != nil {
 		return nil, err
@@ -28,8 +34,8 @@ func NewFileStatus(session *storage.FileContracts, contracts []*guardPb.Contract
 	var (
 		rentStart   time.Time
 		rentEnd     time.Time
-		preparerPid = session.Renter.Pretty()
-		renterPid   = session.Renter.Pretty()
+		preparerPid = renterId
+		renterPid   = renterId
 		rentalState = guardPb.FileStoreStatus_NEW
 	)
 	if len(contracts) > 0 {
@@ -44,10 +50,10 @@ func NewFileStatus(session *storage.FileContracts, contracts []*guardPb.Contract
 
 	fileStoreMeta := guardPb.FileStoreMeta{
 		RenterPid:        renterPid,
-		FileHash:         session.FileHash.String(), //TODO need to check
-		FileSize:         10000,                     //TODO need to revise later
-		RentStart:        rentStart,                 //TODO need to revise later
-		RentEnd:          rentEnd,                   //TODO need to revise later
+		FileHash:         fileHash,  //TODO need to check
+		FileSize:         10000,     //TODO need to revise later
+		RentStart:        rentStart, //TODO need to revise later
+		RentEnd:          rentEnd,   //TODO need to revise later
 		CheckFrequency:   0,
 		GuardFee:         0,
 		EscrowFee:        0,
@@ -207,6 +213,40 @@ func PrepAndUploadFileMeta(ctx context.Context, ss *storage.FileContracts,
 	}
 
 	fileStatus, err := NewFileStatus(ss, contracts, configuration)
+	if err != nil {
+		return nil, err
+	}
+
+	sign, err := crypto.Sign(payerPriKey, &fileStatus.FileStoreMeta)
+	if err != nil {
+		return nil, err
+	}
+	if fileStatus.PreparerPid == fileStatus.RenterPid {
+		fileStatus.RenterSignature = sign
+	} else {
+		fileStatus.RenterSignature = sign
+		fileStatus.PreparerSignature = sign
+	}
+
+	err = submitFileStatus(ctx, configuration, fileStatus)
+	if err != nil {
+		return nil, err
+	}
+
+	return fileStatus, nil
+}
+
+func PrepAndUploadFileMeta2(ctx context.Context, contracts []*guardPb.Contract, payinRes *escrowPb.SignedPayinResult,
+	payerPriKey ic.PrivKey, configuration *config.Config, renterId string, fileHash string) (*guardPb.FileStoreStatus,
+	error) {
+	sig := payinRes.EscrowSignature
+	for _, guardContract := range contracts {
+		guardContract.EscrowSignature = sig
+		guardContract.EscrowSignedTime = payinRes.Result.EscrowSignedTime
+		guardContract.LastModifyTime = time.Now()
+	}
+
+	fileStatus, err := NewFileStatus2(contracts, configuration, renterId, fileHash)
 	if err != nil {
 		return nil, err
 	}

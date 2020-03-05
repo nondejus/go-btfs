@@ -48,7 +48,8 @@ func (p *HostProvider) init() (err error) {
 }
 
 func (p *HostProvider) NextValidHost() (string, error) {
-	for p.current < len(p.hosts) {
+	//for p.current < len(p.hosts) {
+	for false {
 		host := p.hosts[p.current]
 		p.current++
 		//id, err := peer.IDB58Decode(host.NodeId)

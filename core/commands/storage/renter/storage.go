@@ -14,6 +14,7 @@ import (
 	"github.com/TRON-US/go-btfs/core/hub"
 	coreiface "github.com/TRON-US/interface-go-btfs-core"
 	"github.com/TRON-US/interface-go-btfs-core/path"
+	"github.com/alecthomas/units"
 	"github.com/google/uuid"
 	cidlib "github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p-core/peer"
@@ -135,9 +136,11 @@ Use status command to check for completion:
 			hashes = append(hashes, cid.String())
 		}
 		// init
-		ctx, cancel := context.WithTimeout(req.Context, req.Command.RunTimeout)
-		defer cancel()
-		session := NewSession(ctx, n.Repo.Datastore(), n.Identity.String())
+		ctx, _ := context.WithTimeout(req.Context, req.Command.RunTimeout)
+		session, err := GetSession(ctx, n.Repo.Datastore(), cfg, n, api, n.Identity.String(), "")
+		if err != nil {
+			return err
+		}
 		err = session.ToInit(n.Identity.String(), hashStr, hashes)
 		if err != nil {
 			return err
@@ -166,7 +169,13 @@ Use status command to check for completion:
 			if err != nil {
 				return err
 			}
-			contract, err := escrow.NewContract(cfg, uuid.New().String(), n, peerId, price, false, 0)
+			fmt.Println("shardSize", shardSize, "price", price, "storageLength", storageLength)
+			totalPay := int64(float64(shardSize) / float64(units.GiB) * float64(price) * float64(storageLength))
+			if totalPay == 0 {
+				totalPay = 1
+			}
+			fmt.Println("totalPay", totalPay)
+			contract, err := escrow.NewContract(cfg, uuid.New().String(), n, peerId, totalPay, false, 0)
 			if err != nil {
 				return fmt.Errorf("create escrow contract failed: [%v] ", err)
 			}
@@ -188,7 +197,7 @@ Use status command to check for completion:
 				ContractId:     session.Id,
 				Receiver:       host,
 				Price:          price,
-				TotalPay:       0,
+				TotalPay:       totalPay,
 				StartTime:      time.Now().UTC(),
 				ContractLength: time.Duration(storageLength*24) * time.Hour,
 			}
@@ -296,7 +305,7 @@ var StorageUploadRecvContractCmd = &cmds.Command{
 			return err
 		}
 		fmt.Println("h", shardHash, "to complete...")
-		s.ToComplete()
+		s.ToComplete(escrowContractBytes)
 		return nil
 	},
 }
@@ -314,11 +323,25 @@ This command print upload and payment status by the time queried.`,
 		status := &StatusRes{}
 		// check and get session info from sessionMap
 		ssID := req.Arguments[0]
+		// get hosts
+		cfg, err := cmdenv.GetConfig(env)
+		if err != nil {
+			return err
+		}
+
+		// get node
 		n, err := cmdenv.GetNode(env)
 		if err != nil {
 			return err
 		}
-		session, err := GetSession(req.Context, n.Repo.Datastore(), n.Identity.String(), ssID)
+
+		// get core api
+		api, err := cmdenv.GetApi(env, req)
+		if err != nil {
+			return err
+		}
+
+		session, err := GetSession(req.Context, n.Repo.Datastore(), cfg, n, api, n.Identity.String(), ssID)
 		if err != nil {
 			return err
 		}
@@ -330,10 +353,6 @@ This command print upload and payment status by the time queried.`,
 		status.Message = sessionStatus.Message
 
 		// check if checking request from host or client
-		cfg, err := cmdenv.GetConfig(env)
-		if err != nil {
-			return err
-		}
 		if !cfg.Experimental.StorageClientEnabled && !cfg.Experimental.StorageHostEnabled {
 			return fmt.Errorf("storage client/host api not enabled")
 		}
