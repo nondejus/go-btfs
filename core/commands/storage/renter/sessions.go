@@ -8,6 +8,7 @@ import (
 	"github.com/TRON-US/go-btfs/core"
 	"github.com/TRON-US/go-btfs/core/commands/storage/ds"
 	"github.com/TRON-US/go-btfs/core/escrow"
+	"github.com/TRON-US/go-btfs/core/guard"
 	coreiface "github.com/TRON-US/interface-go-btfs-core"
 	"github.com/cenkalti/backoff/v3"
 	"github.com/google/uuid"
@@ -18,7 +19,7 @@ import (
 	"github.com/tron-us/go-btfs-common/crypto"
 	renterpb "github.com/tron-us/go-btfs-common/protos/btfs/renter"
 	escrowpb "github.com/tron-us/go-btfs-common/protos/escrow"
-	"github.com/tron-us/go-btfs-common/protos/guard"
+	guardpb "github.com/tron-us/go-btfs-common/protos/guard"
 	"github.com/tron-us/go-btfs-common/utils/grpc"
 	"github.com/tron-us/protobuf/proto"
 	"time"
@@ -304,22 +305,20 @@ func (f *Session) onGuard(payinRes *escrowpb.SignedPayinResult, payerPriKey ic.P
 		return err
 	}
 	fmt.Println("md", md)
-	/*
-		fsStatus, err := guard.PrepAndUploadFileMeta2(f.ctx, ss, payinRes, payerPriKey, f.cfg)
-		if err != nil {
-			return fmt.Errorf("failed to send file meta to guard: [%v]", err)
-		}
+	fsStatus, err := guard.PrepAndUploadFileMeta2(f.ctx, ss, payinRes, payerPriKey, f.cfg)
+	if err != nil {
+		return fmt.Errorf("failed to send file meta to guard: [%v]", err)
+	}
 
-		qs, err := guard.PrepFileChallengeQuestions(ctx, n, api, ss, fsStatus)
-		if err != nil {
-			return err
-		}
+	qs, err := guard.PrepFileChallengeQuestions(ctx, n, api, ss, fsStatus)
+	if err != nil {
+		return err
+	}
 
-		err = guard.SendChallengeQuestions(ctx, cfg, ss.FileHash, qs)
-		if err != nil {
-			return fmt.Errorf("failed to send challenge questions to guard: [%v]", err)
-		}
-	*/
+	err = guard.SendChallengeQuestions(ctx, cfg, ss.FileHash, qs)
+	if err != nil {
+		return fmt.Errorf("failed to send challenge questions to guard: [%v]", err)
+	}
 	go func() {
 		f.ToWaitUpload(payerPriKey)
 	}()
@@ -342,8 +341,8 @@ func (f *Session) onWaitUpload(payerPriKey ic.PrivKey) error {
 	go func() {
 		err := backoff.Retry(func() error {
 			err := grpc.GuardClient(f.cfg.Services.GuardDomain).WithContext(f.ctx,
-				func(ctx context.Context, client guard.GuardServiceClient) error {
-					req := &guard.CheckFileStoreMetaRequest{
+				func(ctx context.Context, client guardpb.GuardServiceClient) error {
+					req := &guardpb.CheckFileStoreMetaRequest{
 						FileHash:     md.FileHash,
 						RenterPid:    md.RenterId,
 						RequesterPid: f.n.Identity.Pretty(),
@@ -358,7 +357,7 @@ func (f *Session) onWaitUpload(payerPriKey ic.PrivKey) error {
 					if err != nil {
 						return err
 					}
-					if meta.State == guard.FileStoreStatus_RUNNING {
+					if meta.State == guardpb.FileStoreStatus_RUNNING {
 						return nil
 					}
 					return errors.New("uploading")
