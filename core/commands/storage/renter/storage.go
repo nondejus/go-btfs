@@ -156,101 +156,102 @@ Use status command to check for completion:
 				ns.StorageTimeMin, storageLength)
 		}
 		for i, h := range hashes {
-			s, err := GetShard(req.Context, n.Repo.Datastore(), n.Identity.String(), session.Id, h)
-			if err != nil {
-				return err
-			}
-			shardHashes = append(shardHashes, h)
-			host, err := hp.NextValidHost()
-			if err != nil {
-				return err
-			}
-			peerId, err := peer.IDB58Decode(host)
-			if err != nil {
-				return err
-			}
-			fmt.Println("shardSize", shardSize, "price", price, "storageLength", storageLength)
-			totalPay := int64(float64(shardSize) / float64(units.GiB) * float64(price) * float64(storageLength))
-			if totalPay == 0 {
-				totalPay = 1
-			}
-			fmt.Println("totalPay", totalPay)
-			contract, err := escrow.NewContract(cfg, uuid.New().String(), n, peerId, totalPay, false, 0)
-			if err != nil {
-				return fmt.Errorf("create escrow contract failed: [%v] ", err)
-			}
-			halfSignedEscrowContract, err := escrow.SignContractAndMarshal(contract, nil, n.PrivateKey, true)
-			if err != nil {
-				return fmt.Errorf("sign escrow contract and maorshal failed: [%v] ", err)
-			}
+			go func(i int, h string) error {
+				s, err := GetShard(req.Context, n.Repo.Datastore(), n.Identity.String(), session.Id, h)
+				if err != nil {
+					return err
+				}
+				shardHashes = append(shardHashes, h)
+				host, err := hp.NextValidHost()
+				if err != nil {
+					return err
+				}
+				peerId, err := peer.IDB58Decode(host)
+				if err != nil {
+					return err
+				}
+				fmt.Println("shardSize", shardSize, "price", price, "storageLength", storageLength)
+				totalPay := int64(float64(shardSize) / float64(units.GiB) * float64(price) * float64(storageLength))
+				if totalPay == 0 {
+					totalPay = 1
+				}
+				fmt.Println("totalPay", totalPay)
+				contract, err := escrow.NewContract(cfg, uuid.New().String(), n, peerId, totalPay, false, 0)
+				if err != nil {
+					return fmt.Errorf("create escrow contract failed: [%v] ", err)
+				}
+				halfSignedEscrowContract, err := escrow.SignContractAndMarshal(contract, nil, n.PrivateKey, true)
+				if err != nil {
+					return fmt.Errorf("sign escrow contract and maorshal failed: [%v] ", err)
+				}
 
-			metadata, err := session.GetMetadata()
-			if err != nil {
-				return err
-			}
-			md := &shardpb.Metadata{
-				Index:          int32(i),
-				SessionId:      session.Id,
-				FileHash:       metadata.FileHash,
-				ShardFileSize:  int64(shardSize),
-				StorageLength:  int64(storageLength),
-				ContractId:     session.Id,
-				Receiver:       host,
-				Price:          price,
-				TotalPay:       totalPay,
-				StartTime:      time.Now().UTC(),
-				ContractLength: time.Duration(storageLength*24) * time.Hour,
-			}
-			s.ToInit(md)
-			guardContractMeta, err := NewContract2(md, h, cfg, n.Identity.String())
-			if err != nil {
-				return fmt.Errorf("fail to new contract meta: [%v] ", err)
-			}
-			halfSignGuardContract, err := SignedContractAndMarshal(guardContractMeta, nil, n.PrivateKey, true,
-				false, n.Identity.Pretty(), n.Identity.Pretty())
-			fmt.Println("guardContractMeta", guardContractMeta)
-			if err != nil {
-				return fmt.Errorf("fail to sign guard contract and marshal: [%v] ", err)
-			}
+				metadata, err := session.GetMetadata()
+				if err != nil {
+					return err
+				}
+				md := &shardpb.Metadata{
+					Index:          int32(i),
+					SessionId:      session.Id,
+					FileHash:       metadata.FileHash,
+					ShardFileSize:  int64(shardSize),
+					StorageLength:  int64(storageLength),
+					ContractId:     session.Id,
+					Receiver:       host,
+					Price:          price,
+					TotalPay:       totalPay,
+					StartTime:      time.Now().UTC(),
+					ContractLength: time.Duration(storageLength*24) * time.Hour,
+				}
+				s.ToInit(md)
+				guardContractMeta, err := NewContract2(md, h, cfg, n.Identity.String())
+				if err != nil {
+					return fmt.Errorf("fail to new contract meta: [%v] ", err)
+				}
+				halfSignGuardContract, err := SignedContractAndMarshal(guardContractMeta, nil, n.PrivateKey, true,
+					false, n.Identity.Pretty(), n.Identity.Pretty())
+				fmt.Println("guardContractMeta", guardContractMeta)
+				if err != nil {
+					return fmt.Errorf("fail to sign guard contract and marshal: [%v] ", err)
+				}
 
-			sc := &shardpb.Contracts{}
-			sc.HalfSignedEscrowContract = halfSignedEscrowContract
-			sc.HalfSignedGuardContract = halfSignGuardContract
+				sc := &shardpb.Contracts{}
+				sc.HalfSignedEscrowContract = halfSignedEscrowContract
+				sc.HalfSignedGuardContract = halfSignGuardContract
 
-			fmt.Println(5)
-			fmt.Println("session.Id", session.Id)
-			fmt.Println("metadata.FileHash", metadata.FileHash)
-			fmt.Println("h.String()", h)
-			fmt.Println("md.Price", strconv.FormatInt(md.Price, 10))
-			fmt.Println("halfSignedEscrowContract", len(halfSignedEscrowContract))
-			fmt.Println("halfSignGuardContract", len(halfSignGuardContract))
-			fmt.Println("md.StorageLength", md.StorageLength)
-			fmt.Println("md.ShardFileSize", md.ShardFileSize)
-			fmt.Println("i", i)
-			fmt.Println("peerId", peerId)
-			_, err = remote.P2PCall(req.Context, n, peerId, "/storage/upload/init",
-				session.Id,
-				metadata.FileHash,
-				h,
-				strconv.FormatInt(md.Price, 10),
-				halfSignedEscrowContract,
-				halfSignGuardContract,
-				strconv.FormatInt(md.StorageLength, 10),
-				strconv.FormatInt(md.ShardFileSize, 10),
-				strconv.Itoa(i),
-			)
-			if err != nil {
-				fmt.Println("err", err)
-				s.ToError(err)
-			} else {
-				fmt.Println("h", h, "to contract...")
-				s.ToContract(sc)
-			}
-			status, err := s.Status()
-			if err != nil {
-				fmt.Println("error when get status:", err.Error())
-			}
-			fmt.Println("hash", h, "status", status.Status, "msg", status.Message)
+				fmt.Println(5)
+				fmt.Println("session.Id", session.Id)
+				fmt.Println("metadata.FileHash", metadata.FileHash)
+				fmt.Println("h.String()", h)
+				fmt.Println("md.Price", strconv.FormatInt(md.Price, 10))
+				fmt.Println("halfSignedEscrowContract", len(halfSignedEscrowContract))
+				fmt.Println("halfSignGuardContract", len(halfSignGuardContract))
+				fmt.Println("md.StorageLength", md.StorageLength)
+				fmt.Println("md.ShardFileSize", md.ShardFileSize)
+				fmt.Println("i", i)
+				fmt.Println("peerId", peerId)
+				_, err = remote.P2PCall(req.Context, n, peerId, "/storage/upload/init",
+					session.Id,
+					metadata.FileHash,
+					h,
+					strconv.FormatInt(md.Price, 10),
+					halfSignedEscrowContract,
+					halfSignGuardContract,
+					strconv.FormatInt(md.StorageLength, 10),
+					strconv.FormatInt(md.ShardFileSize, 10),
+					strconv.Itoa(i),
+				)
+				if err != nil {
+					s.ToError(err)
+				} else {
+					s.ToContract(sc)
+				}
+				status, err := s.Status()
+				if err != nil {
+					fmt.Println("error when get status:", err.Error())
+				}
+				fmt.Println("hash", h, "status", status.Status, "msg", status.Message)
+				return nil
+			}(i, h)
 		}
 		seRes := &UploadRes{
 			ID: session.Id,

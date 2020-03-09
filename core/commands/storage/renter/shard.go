@@ -44,10 +44,8 @@ func GetShard(ctx context.Context, ds datastore.Datastore, peerId string, sessio
 	k := fmt.Sprintf(shardInMemKey, peerId, sessionId, shardHash)
 	var s *Shard
 	if tmp, ok := shardsInMem.Get(k); ok {
-		fmt.Println("from cache")
 		s = tmp.(*Shard)
 	} else {
-		fmt.Println("new shard")
 		s = &Shard{
 			ctx:       ctx,
 			ds:        ds,
